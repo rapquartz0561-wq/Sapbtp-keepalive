@@ -79,77 +79,69 @@ jobs:
 
     - name: Determine CF API endpoint and app name
       run: |
-        # 设置API端点和生成随机字符串
         RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 6)
         
+        # 确定 API 和 初始 APP_NAME
         case "${{ github.event.inputs.region }}" in
           "SG(free)")
-            echo "CF_API=https://api.cf.ap21.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=free-sg$RANDOM_STR" >> $GITHUB_ENV
+            CF_API="https://api.cf.ap21.hana.ondemand.com"
+            APP_NAME="free-sg$RANDOM_STR"
             ;;
           "US(free)")
-            echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=free-us$RANDOM_STR" >> $GITHUB_ENV
+            CF_API="https://api.cf.us10-001.hana.ondemand.com"
+            APP_NAME="free-us$RANDOM_STR"
             ;;
-          "AWS-AU(Sydney)")
-            echo "CF_API=https://api.cf.ap10.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-au$RANDOM_STR" >> $GITHUB_ENV
+          *)
+            # 默认兜底（防止未匹配到 region）
+            CF_API="https://api.cf.us10-001.hana.ondemand.com"
+            APP_NAME="app-$RANDOM_STR"
             ;;
-          "AWS-BR(São Paulo)")
-            echo "CF_API=https://api.cf.br10.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-br$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-KR(Seoul)")
-            echo "CF_API=https://api.cf.ap12.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-kr$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-CA(Montreal)")
-            echo "CF_API=https://api.cf.ca10.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-ca$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-US(VA)")
-            echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-usva$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-US(OR)")
-            echo "CF_API=https://api.cf.us11.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-usor$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-EU(Frankfurt)")
-            echo "CF_API=https://api.cf.eu10-005.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-eu$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-JP(Tokyo)")
-            echo "CF_API=https://api.cf.jp10.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-jp$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "AWS-SG(Singapore)")
-            echo "CF_API=https://api.cf.ap11.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=aws-sg$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-AU(Sydney)")
-            echo "CF_API=https://api.cf.ap30.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=gcp-au$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-BR(São Paulo)")
-            echo "CF_API=https://api.cf.br30.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=gcp-br$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-US(IA)")
-            echo "CF_API=https://api.cf.us30.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=gcp-us$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-EU(Frankfurt)")
-            echo "CF_API=https://api.cf.eu30.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=gcp-eu$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-JP(Osaka)")
-            echo "CF_API=https://api.cf.jp30.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=gcp-jpo$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-JP(Tokyo)")
-            echo "CF_API=https://api.cf.jp31.hana.ondemand.com" >> $GITHUB_ENV
-            echo "APP_NAME=gcp-jpt$RANDOM_STR" >> $GITHUB_ENV
-            ;;
-          "GCP-IL(Tel Aviv)")
-            echo "CF_API=https://api.cf.il3
+        esac
+
+        # 如果用户手动输入了名称，覆盖它
+        if [ -n "${{ github.event.inputs.app_name }}" ]; then
+          APP_NAME="${{ github.event.inputs.app_name }}"
+        fi
+
+        # 确定 Docker 镜像
+        if [[ -n "${{ secrets.DOCKER_IMAGE }}" ]]; then
+          D_IMG="${{ secrets.DOCKER_IMAGE }}"
+        else
+          if [ "${{ github.event.inputs.type }}" = "ws直连" ]; then
+            D_IMG="ghcr.io/eooce/ws:latest"
+          elif [ "${{ github.event.inputs.type }}" = "xhttp直连" ]; then
+            D_IMG="ghcr.io/eooce/goxhttp:latest"
+          else 
+            D_IMG="ghcr.io/eooce/nodejs:main"
+          fi
+        fi
+
+        # 统一写入环境变量，避免多次 echo 导致的引号风险
+        echo "CF_API=$CF_API" >> $GITHUB_ENV
+        echo "APP_NAME=$APP_NAME" >> $GITHUB_ENV
+        echo "DOCKER_IMAGE=$D_IMG" >> $GITHUB_ENV
+
+    - name: Login to Cloud Foundry
+      run: |
+        # 使用单引号保护密码，防止特殊字符干扰
+        cf login -a "${{ env.CF_API }}" -u "${{ secrets.EMAIL }}" -p '${{ secrets.PASSWORD }}'
+        
+        # 自动提取 Org 和 Space
+        ORG=$(cf orgs | sed -n '4p')
+        SPACE=$(cf spaces | sed -n '4p')
+        
+        echo "ORG=$ORG" >> $GITHUB_ENV
+        echo "SPACE=$SPACE" >> $GITHUB_ENV
+        
+        # 最终确认登录
+        cf login -a "${{ env.CF_API }}" -u "${{ secrets.EMAIL }}" -p '${{ secrets.PASSWORD }}' -o "$ORG" -s "$SPACE"
+
+    - name: Deploy application
+      run: |
+        if cf push "${{ env.APP_NAME }}" --docker-image "${{ env.DOCKER_IMAGE }}" -m ${{ env.MEMORY }} -k ${{ env.DISK }} --health-check-type port; then
+          echo "Deployment successful"
+        else
+          cf delete "${{ env.APP_NAME }}" -r -f
+          echo "部署失败，已清理残留"
+          exit 1
+        fi
